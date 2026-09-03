@@ -14,6 +14,24 @@ NOMBRE_SIN_DATOS = "SIN DATOS DEL INFORME"
 NOMBRE_SIN_ARCHIVO = "ARCHIVO_NO_ASIGNADO"
 
 
+CARACTERES_INVALIDOS = '\\/:*?"<>|'
+
+
+def nombre_reporte_por_defecto() -> str:
+    return f"reporte_renombrado_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def sanitizar_nombre_reporte(nombre: str) -> str:
+    """Convierte lo que escriba el usuario en un nombre de archivo .xlsx valido."""
+    limpio = "".join("_" if c in CARACTERES_INVALIDOS else c for c in str(nombre))
+    limpio = limpio.strip().rstrip(". ").strip()
+    if limpio.lower().endswith(".xlsx"):
+        limpio = limpio[:-5].strip().rstrip(". ").strip()
+    if not limpio:
+        limpio = nombre_reporte_por_defecto()
+    return limpio[:120] + ".xlsx"
+
+
 def tiene_archivo(row) -> bool:
     """True si la fila tiene un PDF asignado. Sin archivo no se propone nombre."""
     ruta = row.get("Ruta_Archivo_Original")
@@ -201,7 +219,8 @@ def generar_guia_completa(df_informe: pd.DataFrame, rutas_pdfs_a_renombrar: list
     return df_informe
 
 
-def ejecutar_renombrado(df_final: pd.DataFrame, destino_path: Path) -> tuple[int, int, Path | None]:
+def ejecutar_renombrado(df_final: pd.DataFrame, destino_path: Path,
+                        nombre_reporte: str | None = None) -> tuple[int, int, Path | None]:
     exitosos = 0
     fallidos = 0
     destino_path.mkdir(parents=True, exist_ok=True)
@@ -288,7 +307,15 @@ def ejecutar_renombrado(df_final: pd.DataFrame, destino_path: Path) -> tuple[int
             })
 
     df_resultados = pd.DataFrame(resultados)
-    reporte_path = destino_path / f"reporte_renombrado_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    archivo_reporte = sanitizar_nombre_reporte(nombre_reporte or nombre_reporte_por_defecto())
+    reporte_path = destino_path / archivo_reporte
+
+    # No pisar un reporte existente: se agrega un consecutivo.
+    base = reporte_path.stem
+    consecutivo = 2
+    while reporte_path.exists():
+        reporte_path = destino_path / f"{base}_{consecutivo}.xlsx"
+        consecutivo += 1
     df_resultados.to_excel(reporte_path, index=False, engine="openpyxl")
     logging.info(f"Reporte Excel generado: {reporte_path}")
 

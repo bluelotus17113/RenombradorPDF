@@ -1,7 +1,7 @@
 # src/gui.py
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 from pathlib import Path
 import logging
 import os
@@ -107,7 +107,7 @@ class SettingsDialog(tk.Toplevel):
             self._refresh_perfil_list()
 
     def _new_perfil(self):
-        nombre = tk.simpledialog.askstring("Nuevo perfil", "Nombre del nuevo perfil:", parent=self)
+        nombre = simpledialog.askstring("Nuevo perfil", "Nombre del nuevo perfil:", parent=self)
         if not nombre:
             return
         perfil_actual = config.get_perfiles().get(config.get_perfil_activo_nombre(), {})
@@ -277,7 +277,14 @@ COLORES DE LA TABLA
 Abajo a la derecha esta el conteo: Filas, Listos, Sin archivo, Sin datos y
 Duplicados. Antes de ejecutar se muestra ese mismo resumen para confirmar.
 
-Al ejecutar, el Excel (reporte_renombrado_FECHA.xlsx) trae una fila por
+Al ejecutar, despues de elegir la carpeta de destino, la aplicacion pregunta
+como quieres llamar al reporte (por ejemplo "monteria_agosto_lote1"). Se
+propone un nombre con la fecha y la hora; puedes cambiarlo por uno que
+reconozcas despues. Los caracteres que Windows no admite se reemplazan por _ y
+si ya existe un archivo con ese nombre se agrega un consecutivo. Cancelar en
+esa ventana cancela todo: no se renombra nada.
+
+El Excel trae una fila por
 registro con la columna Resultado:
 
    Exitoso                          El archivo se renombro y se movio.
@@ -1139,7 +1146,21 @@ class RenamerApp:
             if not destination_folder:
                 self.status_var.set("Operacion cancelada.")
                 return
-            exitosos, fallidos, reporte_path = logica_renombrado.ejecutar_renombrado(self.guide_df, Path(destination_folder))
+
+            nombre_reporte = simpledialog.askstring(
+                "Nombre del reporte",
+                "Como quieres llamar al Excel del reporte?\n"
+                "(sin extension, se guarda como .xlsx)",
+                initialvalue=logica_renombrado.nombre_reporte_por_defecto(),
+                parent=self.root,
+            )
+            if nombre_reporte is None:
+                self.status_var.set("Operacion cancelada. No se renombro ningun archivo.")
+                return
+
+            exitosos, fallidos, reporte_path = logica_renombrado.ejecutar_renombrado(
+                self.guide_df, Path(destination_folder), nombre_reporte=nombre_reporte
+            )
             messagebox.showinfo("Proceso Completado", f"Renombrado finalizado.\n\nExitosos: {exitosos}\nFallidos: {fallidos}\n\nGuardados en: {destination_folder}\n\nReporte Excel:\n{reporte_path}")
             self._reset_app()
 
