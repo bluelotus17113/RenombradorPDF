@@ -175,6 +175,152 @@ class SettingsDialog(tk.Toplevel):
         self.destroy()
 
 
+AYUDA_FLUJO = """COMO FUNCIONA EL PROGRAMA
+
+El informe manda. La aplicacion no lee los PDFs que vas a renombrar: saca los
+datos del informe y los empareja EN ORDEN con los archivos que cargues. Por eso
+existen las herramientas para reordenar antes de ejecutar.
+
+PASO 1 - Configuracion
+   Elige el perfil activo (regex de acta, identificacion y fecha, plantilla del
+   nombre, modo de extraccion y numeros excluidos). El perfil se guarda en
+   config.json y se puede duplicar desde "Nuevo desde actual".
+
+PASO 2 - Cargar Informe
+   Selecciona el PDF del informe. Se lee la capa de texto con PyMuPDF; si una
+   pagina no trae texto suficiente, esa pagina se procesa con OCR (Tesseract).
+   De cada linea que empieza con una fecha se extrae el acta y la
+   identificacion. Los encabezados de seccion marcan las filas del regimen
+   Contributivo, que llevan el sufijo _CO.
+
+PASO 3 - Cargar PDFs
+   Selecciona los archivos a renombrar. Se ordenan alfabeticamente y se asignan
+   a las filas del informe, uno por fila. Si sobran archivos, se agregan al
+   final como "SIN DATOS DEL INFORME". Si preguntas por ANADIR o REEMPLAZAR,
+   ANADIR conserva los que ya tenias cargados.
+
+PASO 4 - Revisar (lo mas importante)
+   Recorre la tabla comparando la vista previa del PDF con el recuadro
+   "Verificacion" que esta sobre el visor: arriba el archivo actual, abajo el
+   nombre propuesto. Si el emparejamiento se corrio, usa Subir/Bajar,
+   Intercambiar o Ctrl+Enter para acomodarlo.
+
+PASO 5 - Ejecutar
+   Elige la carpeta de destino. Los archivos se MUEVEN con su nuevo nombre y se
+   genera un reporte en Excel con el resultado de cada fila.
+
+La plantilla por defecto es:  {DocType}_{Identificacion}_{Acta}.pdf
+y los del regimen contributivo terminan en _CO.pdf
+"""
+
+AYUDA_ATAJOS = """ATAJOS DE TECLADO (con el foco en la tabla)
+
+   Ctrl + Enter      Desplaza los PDFs una fila hacia abajo desde la fila
+                     seleccionada. La fila seleccionada queda SIN archivo y sin
+                     nombre propuesto; los demas bajan una posicion.
+                     Se usa cuando falta un documento en medio de la lista.
+
+   Shift + Arriba    Cambia el tipo de documento al anterior de la lista
+   Shift + Abajo     Cambia el tipo de documento al siguiente (CC, TI, PT, RC)
+
+   Shift + Derecha   Anade el sufijo _CO (contributivo)
+   Shift + Izquierda Quita el sufijo _CO
+
+   Tab               Baja la seleccion una fila
+   Supr (Delete)     Elimina las filas seleccionadas (pide confirmacion)
+   Doble clic        Edita la celda "Nuevo Nombre Propuesto" a mano
+                     (Enter guarda, Escape cancela)
+
+   F1                Abre esta ayuda
+
+EN EL VISOR DE PDF
+
+   Rueda del raton   Zoom
+   Arrastrar         Mover la pagina
+   Flechas           Desplazar la vista
+
+BOTONES DE LA SELECCION
+
+   Subir / Bajar     Mueven la fila completa (datos y archivo)
+   Intercambiar      Con dos filas seleccionadas, cambia sus archivos de sitio
+   + Editar/Anadir   Sin seleccion anade una fila; con una fila la edita
+   Aplicar           Aplica el tipo y el CO marcados a las filas seleccionadas
+"""
+
+AYUDA_ESTADOS = """ESTADOS Y REPORTE EXCEL
+
+En la columna "Nuevo Nombre Propuesto" puedes ver:
+
+   CC_1067890123_100001.pdf     Nombre listo. Hay archivo y hay datos.
+   CC_1067890123_100001_CO.pdf  Igual, pero del regimen contributivo.
+
+   ARCHIVO_NO_ASIGNADO          La fila no tiene ningun PDF asignado.
+                                No se propone nombre: sin documento no hay
+                                renombrado. Aparece al desplazar con Ctrl+Enter
+                                o cuando hay mas filas que archivos.
+
+   SIN DATOS DEL INFORME        Hay un PDF, pero el informe no aporto acta e
+                                identificacion para esa fila (archivos
+                                sobrantes o lineas que no se pudieron leer).
+
+Al ejecutar, el Excel (reporte_renombrado_FECHA.xlsx) trae una fila por
+registro con la columna Resultado:
+
+   Exitoso                          El archivo se renombro y se movio.
+   Vacio (sin archivo asociado)     Fila sin PDF. Nombre_Nuevo va en blanco.
+   Sin datos del informe            Habia archivo, pero sin datos para nombrarlo.
+   Fallido (archivo no encontrado)  La ruta ya no existe en el disco.
+
+CONSEJOS
+
+   - Revisa siempre el contador "Filas" y comparalo con el numero de PDFs.
+   - Los archivos se MUEVEN, no se copian: si algo sale mal, quedan en la
+     carpeta de destino con el nombre nuevo.
+   - Los registros que no encuentren su archivo quedan documentados en el
+     Excel, no se pierden.
+   - El log de la sesion queda en la carpeta logs\\app_log.log
+"""
+
+
+class HelpDialog(tk.Toplevel):
+    """Ventana de ayuda con pestanas: flujo, atajos y estados."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Ayuda - Asistente de Renombrado de PDFs")
+        self.geometry("820x620")
+        self.transient(parent)
+
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        for titulo, texto in (
+            ("Como funciona", AYUDA_FLUJO),
+            ("Atajos de teclado", AYUDA_ATAJOS),
+            ("Estados y reporte", AYUDA_ESTADOS),
+        ):
+            frame = ttk.Frame(notebook, padding=5)
+            notebook.add(frame, text=titulo)
+
+            scroll = ttk.Scrollbar(frame, orient=tk.VERTICAL)
+            scroll.pack(side=tk.RIGHT, fill=tk.Y)
+            caja = tk.Text(frame, wrap="word", font=("Consolas", 10),
+                           yscrollcommand=scroll.set, padx=10, pady=10,
+                           relief="flat", background="#FBFBFB")
+            caja.pack(fill=tk.BOTH, expand=True)
+            scroll.config(command=caja.yview)
+            caja.insert("1.0", texto.strip())
+            caja.config(state="disabled")
+
+        pie = ttk.Frame(self, padding=(10, 0, 10, 10))
+        pie.pack(fill=tk.X)
+        ttk.Label(pie, text="Asistente de Renombrado de PDFs v3.0 (Experimental)",
+                  foreground="gray25").pack(side=tk.LEFT)
+        ttk.Button(pie, text="Cerrar", command=self.destroy).pack(side=tk.RIGHT)
+
+        self.bind("<Escape>", lambda e: self.destroy())
+
+
 class RenamerApp:
     def __init__(self, root):
         self.root = root
@@ -205,6 +351,7 @@ class RenamerApp:
         main_controls_frame.pack(side=tk.LEFT)
 
         ttk.Button(main_controls_frame, text="Configuracion", command=self._open_settings).pack(side=tk.LEFT, padx=5)
+        ttk.Button(main_controls_frame, text="Ayuda (F1)", command=self._open_help).pack(side=tk.LEFT, padx=5)
         self.btn_load_report = ttk.Button(main_controls_frame, text="1. Cargar Informe", command=self._load_report)
         self.btn_load_report.pack(side=tk.LEFT, padx=5)
         self.btn_view_report = ttk.Button(main_controls_frame, text="Ver Informe", state="disabled", command=self._view_report_pdf)
@@ -292,6 +439,7 @@ class RenamerApp:
         self.preview_canvas.bind("<ButtonPress-1>", self._start_pan)
         self.preview_canvas.bind("<B1-Motion>", self._do_pan)
         self.root.bind("<KeyPress>", self._on_key_press)
+        self.root.bind("<F1>", lambda e: self._open_help())
 
         self.status_var = tk.StringVar(value="Bienvenido.")
         self.row_count_label = ttk.Label(bottom_frame, textvariable=self.row_count_var, anchor="e")
@@ -305,6 +453,9 @@ class RenamerApp:
 
     def _open_settings(self):
         SettingsDialog(self.root)
+
+    def _open_help(self):
+        HelpDialog(self.root)
 
     def _get_row_doc_type(self, row):
         nombre = str(row.get("Nuevo_Nombre_Propuesto", ""))
