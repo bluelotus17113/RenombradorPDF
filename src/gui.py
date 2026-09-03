@@ -231,6 +231,7 @@ AYUDA_ATAJOS = """ATAJOS DE TECLADO (con el foco en la tabla)
    Doble clic        Edita la celda "Nuevo Nombre Propuesto" a mano
                      (Enter guarda, Escape cancela)
 
+   Ctrl + Z          Deshace el ultimo cambio de la tabla (hasta 30 pasos)
    F1                Abre esta ayuda
 
 EN EL VISOR DE PDF
@@ -266,6 +267,14 @@ En la columna "Nuevo Nombre Propuesto" puedes ver:
    SIN DATOS DEL INFORME        Hay un PDF, pero el informe no aporto acta e
                                 identificacion para esa fila (archivos
                                 sobrantes o lineas que no se pudieron leer).
+
+QUE RECUERDA LA APLICACION
+
+   - La ultima carpeta usada para el informe, para los PDFs y para el destino:
+     la proxima vez los dialogos abren directamente ahi.
+   - El tamano, la posicion y si la ventana estaba maximizada.
+   - Donde dejaste el divisor entre la tabla y el visor.
+   Todo eso se guarda en config.json al cerrar la aplicacion.
 
 COLORES DE LA TABLA
 
@@ -346,7 +355,13 @@ class RenamerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Asistente de Renombrado de PDFs v3.0 (Experimental)")
-        self.root.geometry("1400x800")
+        self.root.geometry(self._geometria_valida(config.get_pref("geometria", "1400x800")))
+        if config.get_pref("maximizada", False):
+            try:
+                self.root.state("zoomed")
+            except tk.TclError:
+                pass
+        self.root.protocol("WM_DELETE_WINDOW", self._al_cerrar)
 
         self.report_path: Path | None = None
         self.pdf_paths: list[Path] = []
@@ -356,6 +371,7 @@ class RenamerApp:
         self.current_zoom: float = 1.0
         self.current_page: int = 0
         self.total_pages: int = 0
+        self.undo_stack: list[pd.DataFrame] = []
         self.row_count_var = tk.StringVar(value="Filas: 0")
         self.doc_type_var = tk.StringVar(value=config.DOC_TYPE_DEFAULT)
         self.is_co_var = tk.BooleanVar(value=False)
@@ -367,6 +383,7 @@ class RenamerApp:
         top_frame.pack(fill=tk.X)
         paned_window = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         paned_window.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.paned_window = paned_window
         bottom_frame = ttk.Frame(self.root, padding="10")
         bottom_frame.pack(fill=tk.X)
 
@@ -399,6 +416,8 @@ class RenamerApp:
         self.btn_swap.pack(side=tk.LEFT, padx=5)
         self.btn_add_manual = ttk.Button(top_frame, text="+ Editar/Anadir", state="disabled", command=self._open_edit_add_dialog)
         self.btn_add_manual.pack(side=tk.LEFT, padx=5)
+        self.btn_undo = ttk.Button(top_frame, text="Deshacer (Ctrl+Z)", state="disabled", command=self._deshacer)
+        self.btn_undo.pack(side=tk.LEFT, padx=5)
 
         exec_controls_frame = ttk.Frame(top_frame)
         exec_controls_frame.pack(side=tk.RIGHT)
@@ -480,6 +499,8 @@ class RenamerApp:
         self.btn_next_page.pack(side=tk.LEFT, padx=5)
         self.root.bind("<KeyPress>", self._on_key_press)
         self.root.bind("<F1>", lambda e: self._open_help())
+        self.root.bind("<Control-z>", lambda e: self._deshacer())
+        self.root.bind("<Control-Z>", lambda e: self._deshacer())
 
         self.status_var = tk.StringVar(value="Bienvenido.")
         self.row_count_label = ttk.Label(bottom_frame, textvariable=self.row_count_var, anchor="e")
@@ -490,6 +511,85 @@ class RenamerApp:
         perfil_nombre = config.get_perfil_activo_nombre()
         if perfil_nombre:
             self.status_var.set(f"Perfil activo: {perfil_nombre}")
+
+        sash = config.get_pref("divisor")
+        if sash:
+            self.root.after(300, lambda: self._restaurar_divisor(sash))
+
+    def _geometria_valida(self, geometria: str) -> str:
+        """Evita que la ventana quede fuera de pantalla si cambio el monitor."""
+        m = re.match(r"^(\d+)x(\d+)(?:\+(-?\d+)\+(-?\d+))?$", str(geometria or ""))
+        if not m:
+            return "1400x800"
+        ancho, alto = int(m.group(1)), int(m.group(2))
+        max_ancho = self.root.winfo_screenwidth()
+        max_alto = self.root.winfo_screenheight()
+        ancho = max(800, min(ancho, max_ancho))
+        alto = max(600, min(alto, max_alto))
+        if m.group(3) is None:
+            return f"{ancho}x{alto}"
+        x = max(0, min(int(m.group(3)), max_ancho - 200))
+        y = max(0, min(int(m.group(4)), max_alto - 200))
+        return f"{ancho}x{alto}+{x}+{y}"
+
+    def _restaurar_divisor(self, posicion):
+        try:
+            self.paned_window.sashpos(0, int(posicion))
+        except Exception:
+            pass
+
+    def _al_cerrar(self):
+        """Guarda tamano, posicion y divisor antes de salir."""
+        resumen = self._resumen_estados()
+        if resumen["listos"]:
+            if not messagebox.askyesno(
+                "Salir",
+                f"Hay {resumen['listos']} fila(s) listas sin renombrar.\n\nSalir de todas formas?"
+            ):
+                return
+        try:
+            maximizada = self.root.state() == "zoomed"
+            config.set_pref("maximizada", maximizada, guardar=False)
+            if not maximizada:
+                config.set_pref("geometria", self.root.geometry(), guardar=False)
+            config.set_pref("divisor", self.paned_window.sashpos(0))
+        except Exception as e:
+            logging.warning(f"No se pudo guardar la disposicion de la ventana: {e}")
+        self.root.destroy()
+
+    def _carpeta_inicial(self, clave, defecto):
+        """Ultima carpeta usada para ese dialogo; si no existe, la de por defecto."""
+        guardada = config.get_pref(clave)
+        if guardada and Path(guardada).is_dir():
+            return guardada
+        return str(defecto)
+
+    def _push_undo(self):
+        """Guarda el estado actual de la tabla para poder deshacer."""
+        if self.guide_df is None:
+            return
+        self.undo_stack.append(self.guide_df.copy(deep=True))
+        if len(self.undo_stack) > 30:
+            self.undo_stack.pop(0)
+        if hasattr(self, "btn_undo"):
+            self.btn_undo.config(state="normal")
+
+    def _limpiar_undo(self):
+        self.undo_stack.clear()
+        if hasattr(self, "btn_undo"):
+            self.btn_undo.config(state="disabled")
+
+    def _deshacer(self, event=None):
+        if not self.undo_stack:
+            self.status_var.set("No hay nada que deshacer.")
+            return "break"
+        self.guide_df = self.undo_stack.pop()
+        if not self.undo_stack and hasattr(self, "btn_undo"):
+            self.btn_undo.config(state="disabled")
+        self._populate_table()
+        self._check_if_ready_to_execute()
+        self.status_var.set(f"Cambio deshecho. Quedan {len(self.undo_stack)} paso(s) atras.")
+        return "break"
 
     def _open_settings(self):
         SettingsDialog(self.root)
@@ -509,6 +609,7 @@ class RenamerApp:
         if not selected_items or self.guide_df is None:
             return
 
+        self._push_undo()
         doc_type = self.doc_type_var.get()
         is_co = self.is_co_var.get()
 
@@ -551,6 +652,7 @@ class RenamerApp:
         if not selected_items or self.guide_df is None:
             return
 
+        self._push_undo()
         con_archivo = [iid for iid in selected_items if self._fila_tiene_archivo(int(iid))]
         if not con_archivo:
             self.status_var.set("Sin archivo asignado: no se propone nombre.")
@@ -592,6 +694,7 @@ class RenamerApp:
         if not selected_items or self.guide_df is None:
             return
 
+        self._push_undo()
         for iid in selected_items:
             idx = int(iid)
             if not self._fila_tiene_archivo(idx):
@@ -710,6 +813,7 @@ class RenamerApp:
         self.preview_canvas.delete("all")
         self.status_var.set(message)
         self.current_preview_path, self.current_zoom = None, 1.0
+        self._limpiar_undo()
         self.current_page, self.total_pages = 0, 0
         self._actualizar_controles_pagina()
         self.row_count_var.set("Filas: 0")
@@ -765,6 +869,7 @@ class RenamerApp:
         ttk.Button(button_frame, text="Cancelar", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
 
     def _add_row_logic(self, acta: str, id_num: str, es_co: bool = False):
+        self._push_undo()
         if self.guide_df is None:
             self.guide_df = pd.DataFrame(columns=["Acta", "Identificacion", "EsContributivo", "Seccion"])
         new_row = pd.DataFrame([{"Acta": acta, "Identificacion": id_num, "EsContributivo": es_co, "Seccion": ""}])
@@ -775,6 +880,7 @@ class RenamerApp:
     def _edit_row_logic(self, index: int, acta: str, id_num: str, es_co: bool = False):
         if self.guide_df is None:
             return
+        self._push_undo()
         self.guide_df.loc[index, "Acta"] = acta
         self.guide_df.loc[index, "Identificacion"] = id_num
         self.guide_df.loc[index, "EsContributivo"] = es_co
@@ -782,10 +888,15 @@ class RenamerApp:
         self._populate_table()
 
     def _load_report(self):
-        path = filedialog.askopenfilename(title="Selecciona el Informe PDF", filetypes=[("PDF Files", "*.pdf")], initialdir=str(config.INFORME_DIR))
+        path = filedialog.askopenfilename(
+            title="Selecciona el Informe PDF", filetypes=[("PDF Files", "*.pdf")],
+            initialdir=self._carpeta_inicial("dir_informe", config.INFORME_DIR)
+        )
         if not path:
             return
         self.report_path = Path(path)
+        config.set_pref("dir_informe", str(self.report_path.parent))
+        self._limpiar_undo()
         self.status_var.set("Informe cargado. Procesando...")
         self.root.update_idletasks()
         try:
@@ -810,10 +921,15 @@ class RenamerApp:
                 mode = "replace"
             else:
                 return
-        paths = filedialog.askopenfilenames(title="Selecciona los PDFs a Renombrar", filetypes=[("PDF Files", "*.pdf")], initialdir=str(config.PDFS_A_RENOMBRAR_DIR))
+        paths = filedialog.askopenfilenames(
+            title="Selecciona los PDFs a Renombrar", filetypes=[("PDF Files", "*.pdf")],
+            initialdir=self._carpeta_inicial("dir_pdfs", config.PDFS_A_RENOMBRAR_DIR)
+        )
         if not paths:
             return
         new_paths = [Path(p) for p in paths]
+        config.set_pref("dir_pdfs", str(new_paths[0].parent))
+        self._limpiar_undo()
         if mode == "add":
             self.pdf_paths.extend(new_paths)
         else:
@@ -836,6 +952,7 @@ class RenamerApp:
         selected_items = self.tree.selection()
         if len(selected_items) != 2 or self.guide_df is None:
             return
+        self._push_undo()
         idx1, idx2 = int(selected_items[0]), int(selected_items[1])
         route1, route2 = self.guide_df.loc[idx1, "Ruta_Archivo_Original"], self.guide_df.loc[idx2, "Ruta_Archivo_Original"]
         self.guide_df.loc[idx1, "Ruta_Archivo_Original"], self.guide_df.loc[idx2, "Ruta_Archivo_Original"] = route2, route1
@@ -850,6 +967,7 @@ class RenamerApp:
         prev_iid = self.tree.prev(selected_iid)
         if not prev_iid:
             return
+        self._push_undo()
         idx_selected, idx_prev = int(selected_iid), int(prev_iid)
         row_selected, row_prev = self.guide_df.loc[idx_selected].copy(), self.guide_df.loc[idx_prev].copy()
         self.guide_df.loc[idx_selected], self.guide_df.loc[idx_prev] = row_prev, row_selected
@@ -864,6 +982,7 @@ class RenamerApp:
         next_iid = self.tree.next(selected_iid)
         if not next_iid:
             return
+        self._push_undo()
         idx_selected, idx_next = int(selected_iid), int(next_iid)
         row_selected, row_next = self.guide_df.loc[idx_selected].copy(), self.guide_df.loc[idx_next].copy()
         self.guide_df.loc[idx_selected], self.guide_df.loc[idx_next] = row_next, row_selected
@@ -948,6 +1067,7 @@ class RenamerApp:
         if not selection or self.guide_df is None:
             return
 
+        self._push_undo()
         idx = int(selection[0])
         rutas = self.guide_df['Ruta_Archivo_Original'].tolist()
 
@@ -1011,6 +1131,7 @@ class RenamerApp:
             return
         if not messagebox.askyesno("Confirmar", f"Eliminar {len(selected_items)} fila(s)?"):
             return
+        self._push_undo()
         indices_to_drop = [int(iid) for iid in selected_items]
         self.guide_df.drop(indices_to_drop, inplace=True)
         self.guide_df.reset_index(drop=True, inplace=True)
@@ -1103,6 +1224,7 @@ class RenamerApp:
             entry.destroy()
             self.status_var.set("Esa fila no tiene archivo asignado: no se propone nombre.")
             return
+        self._push_undo()
         current_values = list(self.tree.item(iid, "values"))
         current_values[3] = new_value
         self.tree.item(iid, values=tuple(current_values))
@@ -1142,10 +1264,14 @@ class RenamerApp:
         lineas.append(f"Se renombraran {files_to_rename_count} archivo(s). Continuar?")
 
         if messagebox.askyesno("Confirmar renombrado", "\n".join(lineas)):
-            destination_folder = filedialog.askdirectory(title="Selecciona la carpeta de destino", initialdir=str(config.RENAMED_DIR))
+            destination_folder = filedialog.askdirectory(
+                title="Selecciona la carpeta de destino",
+                initialdir=self._carpeta_inicial("dir_destino", config.RENAMED_DIR)
+            )
             if not destination_folder:
                 self.status_var.set("Operacion cancelada.")
                 return
+            config.set_pref("dir_destino", destination_folder)
 
             nombre_reporte = simpledialog.askstring(
                 "Nombre del reporte",

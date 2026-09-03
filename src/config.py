@@ -101,13 +101,32 @@ def get_tesseract_cmd():
     return _json_cfg.get("tesseract_cmd", DEFAULTS.get("tesseract_cmd"))
 
 
+def _guardar_config():
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(_json_cfg, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logging.warning(f"No se pudo guardar config.json ({e}).")
+
+
+def get_pref(clave, defecto=None):
+    """Preferencias de uso (ultimas carpetas, tamano de ventana...)."""
+    return _json_cfg.get("preferencias", {}).get(clave, defecto)
+
+
+def set_pref(clave, valor, guardar=True):
+    prefs = _json_cfg.setdefault("preferencias", {})
+    prefs[clave] = valor
+    if guardar:
+        _guardar_config()
+
+
 def save_perfil(nombre, datos):
     perfiles = get_perfiles()
     perfiles[nombre] = datos
     _json_cfg["perfiles"] = perfiles
     _json_cfg["perfil_activo"] = nombre
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(_json_cfg, f, indent=2, ensure_ascii=False)
+    _guardar_config()
     _apply_perfil()
 
 
@@ -118,8 +137,7 @@ def delete_perfil(nombre):
         _json_cfg["perfiles"] = perfiles
         if get_perfil_activo_nombre() == nombre and perfiles:
             _json_cfg["perfil_activo"] = list(perfiles.keys())[0]
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(_json_cfg, f, indent=2, ensure_ascii=False)
+        _guardar_config()
         _apply_perfil()
         return True
     return False
