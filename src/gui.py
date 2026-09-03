@@ -271,6 +271,19 @@ class RenamerApp:
 
         preview_frame = ttk.Frame(paned_window, padding=5)
         paned_window.add(preview_frame, weight=1)
+
+        preview_header = ttk.LabelFrame(preview_frame, text="Verificacion", padding=5)
+        preview_header.pack(fill=tk.X, pady=(0, 5))
+        self.preview_original_var = tk.StringVar(value="")
+        self.preview_nombre_var = tk.StringVar(value="Selecciona una fila para ver el PDF y su nombre propuesto.")
+        ttk.Label(preview_header, textvariable=self.preview_original_var,
+                  anchor="w", foreground="gray25", wraplength=700).pack(fill=tk.X)
+        self.preview_nombre_label = ttk.Label(
+            preview_header, textvariable=self.preview_nombre_var, anchor="w",
+            font=("Segoe UI", 11, "bold"), wraplength=700
+        )
+        self.preview_nombre_label.pack(fill=tk.X)
+
         self.preview_canvas = tk.Canvas(preview_frame, background="gray", relief="sunken", borderwidth=2)
         self.preview_canvas.pack(fill=tk.BOTH, expand=True)
         self.preview_canvas.bind("<MouseWheel>", self._on_mouse_wheel_zoom)
@@ -435,6 +448,8 @@ class RenamerApp:
             self.btn_move_up.config(state="disabled")
             self.btn_move_down.config(state="disabled")
             self.btn_swap.config(state="disabled")
+        self._actualizar_cabecera_preview()
+
         if not selection or self.guide_df is None:
             return
         last_selected_iid = selection[-1]
@@ -446,6 +461,43 @@ class RenamerApp:
         else:
             self.current_preview_path = None
             self.preview_canvas.delete("all")
+
+    def _actualizar_cabecera_preview(self):
+        """Muestra, junto a la vista previa, el archivo actual y el nombre propuesto."""
+        if not hasattr(self, "preview_nombre_var"):
+            return
+
+        seleccion = self.tree.selection()
+        if not seleccion or self.guide_df is None:
+            self.preview_original_var.set("")
+            self.preview_nombre_var.set("Selecciona una fila para ver el PDF y su nombre propuesto.")
+            self.preview_nombre_label.config(foreground="gray25")
+            return
+
+        if len(seleccion) > 1:
+            self.preview_original_var.set(f"{len(seleccion)} filas seleccionadas")
+            self.preview_nombre_var.set("Selecciona una sola fila para verificar el nombre.")
+            self.preview_nombre_label.config(foreground="gray25")
+            return
+
+        idx = int(seleccion[-1])
+        if idx not in self.guide_df.index:
+            return
+        row = self.guide_df.loc[idx]
+
+        ruta = row.get("Ruta_Archivo_Original")
+        if logica_renombrado.tiene_archivo(row):
+            self.preview_original_var.set(f"Fila {idx + 1}  |  Actual: {Path(str(ruta)).name}")
+        else:
+            self.preview_original_var.set(f"Fila {idx + 1}  |  Sin archivo asignado")
+
+        nombre = str(row.get("Nuevo_Nombre_Propuesto", ""))
+        if nombre in (logica_renombrado.NOMBRE_SIN_ARCHIVO, logica_renombrado.NOMBRE_SIN_DATOS, ""):
+            self.preview_nombre_var.set(nombre or "Sin nombre propuesto")
+            self.preview_nombre_label.config(foreground="#B00000")
+        else:
+            self.preview_nombre_var.set(f"-> {nombre}")
+            self.preview_nombre_label.config(foreground="#0A6B2E")
 
     def _clear_all_with_confirmation(self):
         if not self.report_path and not self.pdf_paths:
@@ -752,6 +804,7 @@ class RenamerApp:
                 self.tree.insert("", tk.END, iid=int(index), values=(row["Acta"], row["Identificacion"], tipo, nuevo_nombre))
             count = len(self.guide_df)
         self.row_count_var.set(f"Filas: {count}")
+        self._actualizar_cabecera_preview()
 
     def _on_double_click(self, event):
         if self.guide_df is None:
