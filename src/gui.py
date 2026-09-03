@@ -238,6 +238,10 @@ EN EL VISOR DE PDF
    Rueda del raton   Zoom
    Arrastrar         Mover la pagina
    Flechas           Desplazar la vista
+   RePag / AvPag     Pagina anterior / siguiente del PDF
+   Botones < >       Debajo del visor cambian de pagina; al lado se indica
+                     "Pagina 1 de 3". Si el PDF tiene una sola pagina quedan
+                     desactivados.
 
 BOTONES DE LA SELECCION
 
@@ -343,6 +347,8 @@ class RenamerApp:
         self.preview_image = None
         self.current_preview_path: Path | None = None
         self.current_zoom: float = 1.0
+        self.current_page: int = 0
+        self.total_pages: int = 0
         self.row_count_var = tk.StringVar(value="Filas: 0")
         self.doc_type_var = tk.StringVar(value=config.DOC_TYPE_DEFAULT)
         self.is_co_var = tk.BooleanVar(value=False)
@@ -452,6 +458,19 @@ class RenamerApp:
         self.preview_canvas.bind("<Button-5>", self._on_mouse_wheel_zoom)
         self.preview_canvas.bind("<ButtonPress-1>", self._start_pan)
         self.preview_canvas.bind("<B1-Motion>", self._do_pan)
+
+        nav_frame = ttk.Frame(preview_frame)
+        nav_frame.pack(fill=tk.X, pady=(5, 0))
+        nav_center = ttk.Frame(nav_frame)
+        nav_center.pack(anchor="center")
+        self.btn_prev_page = ttk.Button(nav_center, text="<", width=4, state="disabled",
+                                        command=lambda: self._cambiar_pagina(-1))
+        self.btn_prev_page.pack(side=tk.LEFT, padx=5)
+        self.pagina_var = tk.StringVar(value="Sin documento")
+        ttk.Label(nav_center, textvariable=self.pagina_var, width=22, anchor="center").pack(side=tk.LEFT)
+        self.btn_next_page = ttk.Button(nav_center, text=">", width=4, state="disabled",
+                                        command=lambda: self._cambiar_pagina(1))
+        self.btn_next_page.pack(side=tk.LEFT, padx=5)
         self.root.bind("<KeyPress>", self._on_key_press)
         self.root.bind("<F1>", lambda e: self._open_help())
 
@@ -622,10 +641,15 @@ class RenamerApp:
         if ruta_str and isinstance(ruta_str, str):
             self.current_preview_path = Path(ruta_str)
             self.current_zoom = 1.0
+            self.current_page = 0
+            self.total_pages = procesamiento_pdf.contar_paginas(self.current_preview_path)
             self._update_preview_image()
         else:
             self.current_preview_path = None
+            self.total_pages = 0
+            self.current_page = 0
             self.preview_canvas.delete("all")
+            self._actualizar_controles_pagina()
 
     def _actualizar_cabecera_preview(self):
         """Muestra, junto a la vista previa, el archivo actual y el nombre propuesto."""
@@ -679,6 +703,8 @@ class RenamerApp:
         self.preview_canvas.delete("all")
         self.status_var.set(message)
         self.current_preview_path, self.current_zoom = None, 1.0
+        self.current_page, self.total_pages = 0, 0
+        self._actualizar_controles_pagina()
         self.row_count_var.set("Filas: 0")
         self.doc_type_var.set(config.DOC_TYPE_DEFAULT)
         self.is_co_var.set(False)
@@ -854,6 +880,10 @@ class RenamerApp:
                 self.preview_canvas.xview_scroll(-1, "units")
             elif event.keysym == "Right":
                 self.preview_canvas.xview_scroll(1, "units")
+            elif event.keysym == "Prior":
+                self._cambiar_pagina(-1)
+            elif event.keysym == "Next":
+                self._cambiar_pagina(1)
 
     def _on_mouse_wheel_zoom(self, event):
         if not self.current_preview_path:
@@ -867,16 +897,44 @@ class RenamerApp:
         self.status_var.set(f"Zoom: {self.current_zoom:.1f}x")
         self._update_preview_image()
 
+    def _cambiar_pagina(self, delta: int):
+        """Avanza o retrocede una pagina del PDF en vista previa."""
+        if not self.current_preview_path or self.total_pages <= 1:
+            return
+        nueva = self.current_page + delta
+        if nueva < 0 or nueva >= self.total_pages:
+            return
+        self.current_page = nueva
+        self._update_preview_image()
+
+    def _actualizar_controles_pagina(self):
+        if not hasattr(self, "pagina_var"):
+            return
+        if not self.current_preview_path or self.total_pages == 0:
+            self.pagina_var.set("Sin documento")
+            self.btn_prev_page.config(state="disabled")
+            self.btn_next_page.config(state="disabled")
+            return
+        self.pagina_var.set(f"Pagina {self.current_page + 1} de {self.total_pages}")
+        self.btn_prev_page.config(state="normal" if self.current_page > 0 else "disabled")
+        self.btn_next_page.config(state="normal" if self.current_page < self.total_pages - 1 else "disabled")
+
     def _update_preview_image(self):
         if not self.current_preview_path or not self.current_preview_path.exists():
             self.preview_canvas.delete("all")
+            self.total_pages = 0
+            self.current_page = 0
+            self._actualizar_controles_pagina()
             return
-        self.preview_image = procesamiento_pdf.generar_imagen_tk_de_pdf(self.current_preview_path, zoom_factor=self.current_zoom)
+        self.preview_image = procesamiento_pdf.generar_imagen_tk_de_pdf(
+            self.current_preview_path, zoom_factor=self.current_zoom, numero_pagina=self.current_page
+        )
         self.preview_canvas.delete("all")
         if self.preview_image:
             self.preview_canvas.create_image(0, 0, anchor="nw", image=self.preview_image)
             bbox = (0, 0, self.preview_image.width(), self.preview_image.height())
             self.preview_canvas.config(scrollregion=bbox)
+        self._actualizar_controles_pagina()
 
     def _shift_pdfs_down(self, event=None):
         selection = self.tree.selection()

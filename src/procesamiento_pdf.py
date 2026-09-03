@@ -75,12 +75,24 @@ def extraer_texto_de_informe(ruta_informe: Path) -> str:
         return ""
 
 
-def generar_imagen_tk_de_pdf(ruta_pdf: Path, zoom_factor: float = 1.0) -> ImageTk.PhotoImage | None:
+def contar_paginas(ruta_pdf: Path) -> int:
+    """Numero de paginas del PDF, 0 si no se puede abrir."""
     try:
         with fitz.open(ruta_pdf) as documento:
-            if not documento:
+            return len(documento)
+    except Exception as e:
+        logging.error(f"No se pudo contar las paginas de '{Path(ruta_pdf).name}': {e}")
+        return 0
+
+
+def generar_imagen_tk_de_pdf(ruta_pdf: Path, zoom_factor: float = 1.0,
+                             numero_pagina: int = 0) -> ImageTk.PhotoImage | None:
+    try:
+        with fitz.open(ruta_pdf) as documento:
+            if not documento or len(documento) == 0:
                 return None
-            pagina = documento.load_page(0)
+            indice = max(0, min(numero_pagina, len(documento) - 1))
+            pagina = documento.load_page(indice)
             matriz = fitz.Matrix(zoom_factor, zoom_factor)
             pixmap = pagina.get_pixmap(matrix=matriz)
             imagen = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
