@@ -113,10 +113,10 @@ def _extraer_dos_listas(texto: str) -> list[dict]:
     return registros
 
 
-def procesar_tabla_de_informe(ruta_pdf: Path) -> pd.DataFrame:
+def procesar_tabla_de_informe(ruta_pdf: Path, progreso=None) -> pd.DataFrame:
     logging.info("Iniciando extraccion de tabla de informe.")
 
-    texto_ocr = extraer_texto_de_informe(ruta_pdf)
+    texto_ocr = extraer_texto_de_informe(ruta_pdf, progreso=progreso)
     if not texto_ocr:
         logging.error("La extraccion de texto devolvio una cadena vacia.")
         return pd.DataFrame()

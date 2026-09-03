@@ -8,6 +8,11 @@ import os
 import pandas as pd
 import re
 import json
+import queue
+import subprocess
+import sys
+import threading
+import traceback
 
 import config
 import procesamiento_pdf
@@ -312,6 +317,92 @@ CONSEJOS
 """
 
 
+class ProgressDialog(tk.Toplevel):
+    """Ventana modal con barra de progreso para tareas largas."""
+
+    def __init__(self, parent, titulo="Procesando", mensaje=""):
+        super().__init__(parent)
+        self.title(titulo)
+        self.geometry("460x150")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.protocol("WM_DELETE_WINDOW", lambda: None)   # no se cierra a mitad
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+        marco = ttk.Frame(self, padding=20)
+        marco.pack(fill=tk.BOTH, expand=True)
+        self.mensaje_var = tk.StringVar(value=mensaje)
+        ttk.Label(marco, textvariable=self.mensaje_var, wraplength=410).pack(anchor="w")
+        self.barra = ttk.Progressbar(marco, mode="indeterminate", length=410)
+        self.barra.pack(fill=tk.X, pady=12)
+        self.barra.start(12)
+        self.detalle_var = tk.StringVar(value="Preparando...")
+        ttk.Label(marco, textvariable=self.detalle_var, foreground="gray25").pack(anchor="w")
+
+    def actualizar(self, valor: int, maximo: int, detalle: str):
+        if maximo > 0 and str(self.barra.cget("mode")) != "determinate":
+            self.barra.stop()
+            self.barra.config(mode="determinate", maximum=maximo)
+        self.barra.config(value=valor)
+        self.detalle_var.set(detalle)
+        self.update_idletasks()
+
+
+class ErrorDialog(tk.Toplevel):
+    """Error explicado en cristiano, con el detalle tecnico a un clic."""
+
+    def __init__(self, parent, titulo, mensaje, detalle=None, abrir_log=None):
+        super().__init__(parent)
+        self.title(titulo)
+        self.resizable(False, False)
+        self.transient(parent)
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+        marco = ttk.Frame(self, padding=20)
+        marco.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(marco, text=titulo, font=("Segoe UI", 12, "bold"),
+                  foreground="#8B0000", wraplength=520).pack(anchor="w")
+        ttk.Label(marco, text=mensaje, wraplength=520, justify="left").pack(anchor="w", pady=(8, 0))
+
+        self._detalle = detalle
+        self._detalle_visible = False
+        self.caja_detalle = None
+
+        botones = ttk.Frame(marco)
+        botones.pack(fill=tk.X, pady=(16, 0))
+        if detalle:
+            self.btn_detalle = ttk.Button(botones, text="Ver detalle tecnico",
+                                          command=self._alternar_detalle)
+            self.btn_detalle.pack(side=tk.LEFT)
+        if abrir_log:
+            ttk.Button(botones, text="Abrir el log", command=abrir_log).pack(side=tk.LEFT, padx=8)
+        ttk.Button(botones, text="Cerrar", command=self.destroy).pack(side=tk.RIGHT)
+
+        self.marco = marco
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def _alternar_detalle(self):
+        if self._detalle_visible:
+            self.caja_detalle.pack_forget()
+            self.btn_detalle.config(text="Ver detalle tecnico")
+            self._detalle_visible = False
+            return
+        if self.caja_detalle is None:
+            self.caja_detalle = tk.Text(self.marco, height=10, width=70, wrap="word",
+                                        font=("Consolas", 9))
+            self.caja_detalle.insert("1.0", self._detalle)
+            self.caja_detalle.config(state="disabled")
+        self.caja_detalle.pack(fill=tk.BOTH, expand=True, pady=(12, 0))
+        self.btn_detalle.config(text="Ocultar detalle")
+        self._detalle_visible = True
+
+
 class HelpDialog(tk.Toplevel):
     """Ventana de ayuda con pestanas: flujo, atajos y estados."""
 
@@ -362,6 +453,7 @@ class RenamerApp:
             except tk.TclError:
                 pass
         self.root.protocol("WM_DELETE_WINDOW", self._al_cerrar)
+        self._aplicar_icono()
 
         self.report_path: Path | None = None
         self.pdf_paths: list[Path] = []
@@ -531,6 +623,45 @@ class RenamerApp:
         x = max(0, min(int(m.group(3)), max_ancho - 200))
         y = max(0, min(int(m.group(4)), max_alto - 200))
         return f"{ancho}x{alto}+{x}+{y}"
+
+    def _aplicar_icono(self):
+        """Icono de la ventana; sirve tanto en desarrollo como empaquetado."""
+        candidatos = []
+        base_empaquetado = getattr(sys, "_MEIPASS", None)
+        if base_empaquetado:
+            candidatos.append(Path(base_empaquetado) / "assets" / "icono.ico")
+        candidatos.append(Path(__file__).parent.parent / "assets" / "icono.ico")
+        candidatos.append(config.BASE_DIR / "assets" / "icono.ico")
+        for ruta in candidatos:
+            try:
+                if ruta.exists():
+                    self.root.iconbitmap(default=str(ruta))
+                    return
+            except Exception as e:
+                logging.warning(f"No se pudo aplicar el icono ({e}).")
+        logging.info("No se encontro assets/icono.ico; se usa el icono por defecto.")
+
+    def _abrir_log(self):
+        """Abre app_log.log con el programa predeterminado del sistema."""
+        try:
+            ruta = str(config.LOG_FILE)
+            if sys.platform.startswith("win"):
+                os.startfile(ruta)
+            else:
+                subprocess.Popen(["xdg-open", ruta])
+        except Exception as e:
+            logging.error(f"No se pudo abrir el log: {e}")
+            messagebox.showinfo("Log", f"El log esta en:\n{config.LOG_FILE}")
+
+    def _mostrar_error(self, titulo, mensaje, detalle=None):
+        ErrorDialog(self.root, titulo, mensaje, detalle=detalle, abrir_log=self._abrir_log)
+
+    def _bloquear_controles(self, bloquear: bool):
+        estado = "disabled" if bloquear else "normal"
+        for boton in (self.btn_load_report, self.btn_load_pdfs, self.btn_clear):
+            boton.config(state=estado)
+        if bloquear:
+            self.btn_execute.config(state="disabled")
 
     def _restaurar_divisor(self, posicion):
         try:
@@ -897,19 +1028,75 @@ class RenamerApp:
         self.report_path = Path(path)
         config.set_pref("dir_informe", str(self.report_path.parent))
         self._limpiar_undo()
-        self.status_var.set("Informe cargado. Procesando...")
-        self.root.update_idletasks()
+        self.status_var.set(f"Procesando {self.report_path.name}...")
+
+        # El informe se procesa en un hilo aparte para que la ventana siga viva:
+        # el OCR de varias paginas puede tardar y Windows la marcaria como
+        # "no responde". El hilo solo publica mensajes en una cola; toda la
+        # interfaz se actualiza desde el hilo principal.
+        self._bloquear_controles(True)
+        dialogo = ProgressDialog(self.root, "Procesando informe",
+                                 f"Leyendo {self.report_path.name}")
+        cola = queue.Queue()
+        ruta = self.report_path
+
+        def trabajo():
+            try:
+                df = logica_renombrado.procesar_tabla_de_informe(
+                    ruta, progreso=lambda pagina, total, ocr: cola.put(("progreso", pagina, total, ocr))
+                )
+                cola.put(("ok", df))
+            except Exception as e:
+                logging.error(f"Error al procesar el informe '{ruta.name}': {e}", exc_info=True)
+                cola.put(("error", e, traceback.format_exc()))
+
+        threading.Thread(target=trabajo, daemon=True).start()
+        self.root.after(80, lambda: self._revisar_cola_informe(cola, dialogo))
+
+    def _revisar_cola_informe(self, cola, dialogo):
         try:
-            self.guide_df = logica_renombrado.procesar_tabla_de_informe(self.report_path)
-            if self.pdf_paths:
-                self.guide_df = logica_renombrado.generar_guia_completa(self.guide_df, self.pdf_paths)
-            self._populate_table()
-            self.btn_view_report.config(state="normal")
-            self.btn_add_manual.config(state="normal")
-            self.status_var.set(f"Informe procesado: {len(self.guide_df)} filas encontradas.")
-        except Exception as e:
-            messagebox.showerror("Error", f"Ocurrio un error al procesar el informe: {e}\n\nConsulta app_log.log.")
-        self._check_if_ready_to_execute()
+            while True:
+                mensaje = cola.get_nowait()
+                tipo = mensaje[0]
+
+                if tipo == "progreso":
+                    _, pagina, total, ocr = mensaje
+                    detalle = f"Pagina {pagina} de {total}"
+                    if ocr:
+                        detalle += "  (sin capa de texto, aplicando OCR...)"
+                    dialogo.actualizar(pagina, total, detalle)
+
+                elif tipo == "ok":
+                    dialogo.destroy()
+                    self._bloquear_controles(False)
+                    self.guide_df = mensaje[1]
+                    if self.pdf_paths:
+                        self.guide_df = logica_renombrado.generar_guia_completa(self.guide_df, self.pdf_paths)
+                    self._populate_table()
+                    self.btn_view_report.config(state="normal")
+                    self.btn_add_manual.config(state="normal")
+                    self.status_var.set(f"Informe procesado: {len(self.guide_df)} filas encontradas.")
+                    self._check_if_ready_to_execute()
+                    return
+
+                elif tipo == "error":
+                    dialogo.destroy()
+                    self._bloquear_controles(False)
+                    self._mostrar_error(
+                        "No se pudo procesar el informe",
+                        f"No fue posible leer los datos de '{self.report_path.name}'.\n\n"
+                        "Comprueba que el archivo sea el informe correcto y que no este "
+                        "abierto en otro programa. Si el PDF es escaneado, revisa que "
+                        "Tesseract este disponible para el OCR.",
+                        detalle=mensaje[2],
+                    )
+                    self.status_var.set("Error al procesar el informe.")
+                    self._check_if_ready_to_execute()
+                    return
+
+        except queue.Empty:
+            pass
+        self.root.after(80, lambda: self._revisar_cola_informe(cola, dialogo))
 
     def _load_pdfs(self):
         mode = "replace"
@@ -1142,7 +1329,12 @@ class RenamerApp:
             try:
                 os.startfile(self.report_path)
             except Exception as e:
-                messagebox.showerror("Error", f"No se pudo abrir el archivo PDF:\n{e}")
+                self._mostrar_error(
+                "No se pudo abrir el PDF",
+                "Windows no pudo abrir el archivo del informe. Puede que se haya "
+                "movido o que no haya un lector de PDF asociado.",
+                detalle=traceback.format_exc(),
+            )
 
     def _resumen_estados(self):
         """Cuenta el estado de cada fila para colorear la tabla y avisar antes de ejecutar."""
@@ -1284,9 +1476,32 @@ class RenamerApp:
                 self.status_var.set("Operacion cancelada. No se renombro ningun archivo.")
                 return
 
-            exitosos, fallidos, reporte_path = logica_renombrado.ejecutar_renombrado(
-                self.guide_df, Path(destination_folder), nombre_reporte=nombre_reporte
-            )
+            try:
+                exitosos, fallidos, reporte_path = logica_renombrado.ejecutar_renombrado(
+                    self.guide_df, Path(destination_folder), nombre_reporte=nombre_reporte
+                )
+            except PermissionError:
+                logging.error("Permiso denegado al escribir el reporte", exc_info=True)
+                self._mostrar_error(
+                    "No se pudo guardar el reporte",
+                    "Windows no dejo escribir el archivo de Excel. Lo mas comun es que "
+                    "un reporte con ese nombre este abierto en Excel: cierralo y vuelve "
+                    "a intentarlo, o usa otro nombre.",
+                    detalle=traceback.format_exc(),
+                )
+                self.status_var.set("El renombrado se interrumpio al guardar el reporte.")
+                return
+            except Exception:
+                logging.error("Error inesperado durante el renombrado", exc_info=True)
+                self._mostrar_error(
+                    "El renombrado se interrumpio",
+                    "Ocurrio un problema durante el proceso. Algunos archivos pueden "
+                    "haberse movido ya a la carpeta de destino; revisa el log para ver "
+                    "hasta donde llego.",
+                    detalle=traceback.format_exc(),
+                )
+                self.status_var.set("Error durante el renombrado.")
+                return
             messagebox.showinfo("Proceso Completado", f"Renombrado finalizado.\n\nExitosos: {exitosos}\nFallidos: {fallidos}\n\nGuardados en: {destination_folder}\n\nReporte Excel:\n{reporte_path}")
             self._reset_app()
 

@@ -23,7 +23,9 @@ else:
         logging.warning("Ruta de Tesseract OCR no valida o no configurada.")
 
 
-def extraer_texto_de_informe(ruta_informe: Path) -> str:
+def extraer_texto_de_informe(ruta_informe: Path, progreso=None) -> str:
+    """Extrae el texto del informe. `progreso` es un callable(pagina, total, uso_ocr)
+    que se invoca antes de procesar cada pagina, para poder mostrar avance."""
     texto_completo = ""
     logging.info(f"Iniciando extraccion multi-pagina para '{ruta_informe.name}'.")
 
@@ -42,6 +44,8 @@ def extraer_texto_de_informe(ruta_informe: Path) -> str:
             for i in range(num_paginas):
                 pagina = documento.load_page(i)
                 logging.info(f"Procesando pagina {i + 1} de {num_paginas}...")
+                if progreso:
+                    progreso(i + 1, num_paginas, False)
 
                 texto_pagina = ""
                 if usar_capa_texto:
@@ -55,6 +59,8 @@ def extraer_texto_de_informe(ruta_informe: Path) -> str:
 
                 if not texto_pagina:
                     ocr_usado = True
+                    if progreso:
+                        progreso(i + 1, num_paginas, True)
                     dpi = config.OCR_DPI
                     matriz = fitz.Matrix(dpi / 72, dpi / 72)
                     pixmap = pagina.get_pixmap(matrix=matriz)

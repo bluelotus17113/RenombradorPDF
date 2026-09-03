@@ -9,6 +9,9 @@ venv/
 /dist/
 *.manifest
 
+# Instalador generado
+instalador/salida/
+
 # Datos de trabajo (PDFs reales, salidas, logs)
 archivos_entrada/
 archivos_salida/

@@ -5,7 +5,7 @@ a = Analysis(
     ['src\\gui.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('src\\config.json', 'src'), ('assets\\icono.ico', 'assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -32,6 +32,8 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets\\icono.ico',
+    version='version_info.txt',
 )
 coll = COLLECT(
     exe,
