@@ -263,6 +263,16 @@ En la columna "Nuevo Nombre Propuesto" puedes ver:
                                 identificacion para esa fila (archivos
                                 sobrantes o lineas que no se pudieron leer).
 
+COLORES DE LA TABLA
+
+   Rojo claro    La fila no tiene archivo asignado (ARCHIVO_NO_ASIGNADO).
+   Amarillo      Hay archivo pero faltan datos del informe.
+   Morado claro  El nombre propuesto esta repetido en otra fila: solo el
+                 primero se renombrara, el resto quedara como fallido.
+
+Abajo a la derecha esta el conteo: Filas, Listos, Sin archivo, Sin datos y
+Duplicados. Antes de ejecutar se muestra ese mismo resumen para confirmar.
+
 Al ejecutar, el Excel (reporte_renombrado_FECHA.xlsx) trae una fila por
 registro con la columna Resultado:
 
@@ -405,6 +415,10 @@ class RenamerApp:
         self.tree.configure(yscrollcommand=scrollbar.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
+
+        self.tree.tag_configure("sin_archivo", background="#FBE3E3", foreground="#8B0000")
+        self.tree.tag_configure("sin_datos", background="#FFF3D6", foreground="#7A4A00")
+        self.tree.tag_configure("duplicado", background="#E4E0FA", foreground="#3B2E8C")
 
         self.tree.bind("<<TreeviewSelect>>", self._on_row_select)
         self.tree.bind("<Double-1>", self._on_double_click)
@@ -944,17 +958,63 @@ class RenamerApp:
             except Exception as e:
                 messagebox.showerror("Error", f"No se pudo abrir el archivo PDF:\n{e}")
 
+    def _resumen_estados(self):
+        """Cuenta el estado de cada fila para colorear la tabla y avisar antes de ejecutar."""
+        resumen = {"total": 0, "listos": 0, "sin_archivo": 0, "sin_datos": 0, "duplicados": {}}
+        if self.guide_df is None or self.guide_df.empty:
+            return resumen
+
+        resumen["total"] = len(self.guide_df)
+        conteo_nombres = {}
+
+        for _, row in self.guide_df.iterrows():
+            nombre = str(row.get("Nuevo_Nombre_Propuesto", ""))
+            if not logica_renombrado.tiene_archivo(row):
+                resumen["sin_archivo"] += 1
+            elif nombre in (logica_renombrado.NOMBRE_SIN_DATOS, logica_renombrado.NOMBRE_SIN_ARCHIVO, ""):
+                resumen["sin_datos"] += 1
+            else:
+                resumen["listos"] += 1
+                conteo_nombres[nombre] = conteo_nombres.get(nombre, 0) + 1
+
+        resumen["duplicados"] = {n: c for n, c in conteo_nombres.items() if c > 1}
+        return resumen
+
+    def _tag_de_fila(self, row, duplicados):
+        nombre = str(row.get("Nuevo_Nombre_Propuesto", ""))
+        if not logica_renombrado.tiene_archivo(row):
+            return ("sin_archivo",)
+        if nombre in (logica_renombrado.NOMBRE_SIN_DATOS, logica_renombrado.NOMBRE_SIN_ARCHIVO, ""):
+            return ("sin_datos",)
+        if nombre in duplicados:
+            return ("duplicado",)
+        return ()
+
     def _populate_table(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
         count = 0
+        resumen = self._resumen_estados()
+        duplicados = resumen["duplicados"]
         if self.guide_df is not None:
             for index, row in self.guide_df.iterrows():
                 nuevo_nombre = row.get("Nuevo_Nombre_Propuesto", "Esperando PDFs...")
                 tipo = "CO" if row.get("EsContributivo", False) else ""
-                self.tree.insert("", tk.END, iid=int(index), values=(row["Acta"], row["Identificacion"], tipo, nuevo_nombre))
+                self.tree.insert("", tk.END, iid=int(index),
+                                 values=(row["Acta"], row["Identificacion"], tipo, nuevo_nombre),
+                                 tags=self._tag_de_fila(row, duplicados))
             count = len(self.guide_df)
-        self.row_count_var.set(f"Filas: {count}")
+
+        texto = f"Filas: {count}"
+        if count:
+            texto += f"  |  Listos: {resumen['listos']}"
+            if resumen["sin_archivo"]:
+                texto += f"  ·  Sin archivo: {resumen['sin_archivo']}"
+            if resumen["sin_datos"]:
+                texto += f"  ·  Sin datos: {resumen['sin_datos']}"
+            if resumen["duplicados"]:
+                texto += f"  ·  Duplicados: {len(resumen['duplicados'])}"
+        self.row_count_var.set(texto)
         self._actualizar_cabecera_preview()
 
     def _on_double_click(self, event):
@@ -988,11 +1048,35 @@ class RenamerApp:
         if self.guide_df is None:
             messagebox.showwarning("Advertencia", "No hay datos procesados.")
             return
-        files_to_rename_count = len(self.guide_df.dropna(subset=["Ruta_Archivo_Original"]))
+        resumen = self._resumen_estados()
+        files_to_rename_count = resumen["listos"]
         if files_to_rename_count == 0:
-            messagebox.showinfo("Informacion", "No hay archivos para renombrar.")
+            messagebox.showinfo("Informacion", "No hay archivos listos para renombrar.")
             return
-        if messagebox.askyesno("Confirmar", f"Renombrar {files_to_rename_count} archivos?"):
+
+        lineas = [
+            "Resumen antes de ejecutar:",
+            "",
+            f"   Listos para renombrar:  {resumen['listos']}",
+        ]
+        if resumen["sin_archivo"]:
+            lineas.append(f"   Sin archivo asignado:   {resumen['sin_archivo']}  (no se renombra nada)")
+        if resumen["sin_datos"]:
+            lineas.append(f"   Sin datos del informe:  {resumen['sin_datos']}  (se quedan como estan)")
+        if resumen["duplicados"]:
+            nombres = sorted(resumen["duplicados"])
+            muestra = ", ".join(nombres[:3])
+            if len(nombres) > 3:
+                muestra += f", ... (+{len(nombres) - 3})"
+            lineas.append("")
+            lineas.append(f"   ATENCION: {len(nombres)} nombre(s) repetido(s):")
+            lineas.append(f"   {muestra}")
+            lineas.append("   Solo el primero se renombrara; los demas quedaran como fallidos.")
+
+        lineas.append("")
+        lineas.append(f"Se renombraran {files_to_rename_count} archivo(s). Continuar?")
+
+        if messagebox.askyesno("Confirmar renombrado", "\n".join(lineas)):
             destination_folder = filedialog.askdirectory(title="Selecciona la carpeta de destino", initialdir=str(config.RENAMED_DIR))
             if not destination_folder:
                 self.status_var.set("Operacion cancelada.")
