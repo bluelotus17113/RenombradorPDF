@@ -308,8 +308,14 @@ class RenamerApp:
         doc_type = self.doc_type_var.get()
         is_co = self.is_co_var.get()
 
+        omitidas = 0
+        aplicadas = 0
         for iid in selected_items:
             idx = int(iid)
+            if not self._fila_tiene_archivo(idx):
+                omitidas += 1
+                continue
+            aplicadas += 1
             current_name = str(self.guide_df.loc[idx, "Nuevo_Nombre_Propuesto"])
             rest_of_name = current_name
             for prefix in config.DOC_TYPES:
@@ -331,14 +337,22 @@ class RenamerApp:
 
         self._populate_table()
         self.tree.selection_set(selected_items)
-        self.status_var.set(f"Cambios aplicados a {len(selected_items)} fila(s).")
+        mensaje = f"Cambios aplicados a {aplicadas} fila(s)."
+        if omitidas:
+            mensaje += f" {omitidas} sin archivo: no se propone nombre."
+        self.status_var.set(mensaje)
 
     def _change_doc_type(self, direction: int):
         selected_items = self.tree.selection()
         if not selected_items or self.guide_df is None:
             return
 
-        reference_iid = selected_items[0]
+        con_archivo = [iid for iid in selected_items if self._fila_tiene_archivo(int(iid))]
+        if not con_archivo:
+            self.status_var.set("Sin archivo asignado: no se propone nombre.")
+            return
+
+        reference_iid = con_archivo[0]
         reference_idx = int(reference_iid)
         reference_name = str(self.guide_df.loc[reference_idx, "Nuevo_Nombre_Propuesto"])
 
@@ -353,7 +367,7 @@ class RenamerApp:
         new_index = (current_index + direction) % len(config.DOC_TYPES)
         new_prefix = config.DOC_TYPES[new_index]
 
-        for iid in selected_items:
+        for iid in con_archivo:
             idx = int(iid)
             current_name = str(self.guide_df.loc[idx, "Nuevo_Nombre_Propuesto"])
             rest_of_name = str(current_name.split("_", 1)[-1])
@@ -376,6 +390,8 @@ class RenamerApp:
 
         for iid in selected_items:
             idx = int(iid)
+            if not self._fila_tiene_archivo(idx):
+                continue
             current_name = str(self.guide_df.loc[idx, "Nuevo_Nombre_Propuesto"])
             name_part, extension = os.path.splitext(current_name)
             if action == "add" and not name_part.endswith("_CO"):
@@ -573,6 +589,7 @@ class RenamerApp:
         idx1, idx2 = int(selected_items[0]), int(selected_items[1])
         route1, route2 = self.guide_df.loc[idx1, "Ruta_Archivo_Original"], self.guide_df.loc[idx2, "Ruta_Archivo_Original"]
         self.guide_df.loc[idx1, "Ruta_Archivo_Original"], self.guide_df.loc[idx2, "Ruta_Archivo_Original"] = route2, route1
+        self._refrescar_nombres([idx1, idx2])
         self._populate_table()
         self.tree.selection_set(selected_items)
 
@@ -665,7 +682,7 @@ class RenamerApp:
             if r:
                 new_row = pd.DataFrame([{
                     "Acta": "", "Identificacion": "", "EsContributivo": False, "Seccion": "",
-                    "Ruta_Archivo_Original": r, "Nuevo_Nombre_Propuesto": "SIN DATOS DEL INFORME"
+                    "Ruta_Archivo_Original": r, "Nuevo_Nombre_Propuesto": logica_renombrado.NOMBRE_SIN_DATOS
                 }])
                 self.guide_df = pd.concat([self.guide_df, new_row], ignore_index=True)
 
@@ -673,19 +690,38 @@ class RenamerApp:
         self._populate_table()
         self.status_var.set(f"Archivos desplazados desde la fila {idx + 1}.")
 
+    def _fila_tiene_archivo(self, idx) -> bool:
+        """Una fila sin PDF asignado no puede tener nombre propuesto."""
+        if self.guide_df is None or idx not in self.guide_df.index:
+            return False
+        return logica_renombrado.tiene_archivo(self.guide_df.loc[idx])
+
+    def _nombre_para_fila(self, row) -> str:
+        if not logica_renombrado.tiene_archivo(row):
+            return logica_renombrado.NOMBRE_SIN_ARCHIVO
+        nombre = logica_renombrado._generar_nombre(row)
+        return nombre if nombre is not None else logica_renombrado.NOMBRE_SIN_DATOS
+
+    def _refrescar_nombres(self, indices):
+        """Recalcula el nombre solo de las filas indicadas, conservando ediciones
+        manuales de las filas que ya tenian archivo y nombre valido."""
+        if self.guide_df is None:
+            return
+        for idx in indices:
+            if idx not in self.guide_df.index:
+                continue
+            row = self.guide_df.loc[idx]
+            actual = str(row.get("Nuevo_Nombre_Propuesto", ""))
+            if not logica_renombrado.tiene_archivo(row):
+                self.guide_df.loc[idx, "Nuevo_Nombre_Propuesto"] = logica_renombrado.NOMBRE_SIN_ARCHIVO
+            elif actual in ("", logica_renombrado.NOMBRE_SIN_ARCHIVO):
+                self.guide_df.loc[idx, "Nuevo_Nombre_Propuesto"] = self._nombre_para_fila(row)
+
     def _update_all_names(self):
         if self.guide_df is None:
             return
         for i, row in self.guide_df.iterrows():
-            nombre = logica_renombrado._generar_nombre(row)
-            if nombre is None:
-                ruta = row.get("Ruta_Archivo_Original")
-                if pd.notna(ruta) and str(ruta).strip() != "":
-                    self.guide_df.loc[i, "Nuevo_Nombre_Propuesto"] = "SIN DATOS DEL INFORME"
-                else:
-                    self.guide_df.loc[i, "Nuevo_Nombre_Propuesto"] = "ARCHIVO_NO_ASIGNADO"
-            else:
-                self.guide_df.loc[i, "Nuevo_Nombre_Propuesto"] = nombre
+            self.guide_df.loc[i, "Nuevo_Nombre_Propuesto"] = self._nombre_para_fila(row)
 
     def _delete_selected_rows(self, event=None):
         selected_items = self.tree.selection()
@@ -734,6 +770,10 @@ class RenamerApp:
         if self.guide_df is None:
             return
         new_value = entry.get()
+        if not self._fila_tiene_archivo(int(iid)):
+            entry.destroy()
+            self.status_var.set("Esa fila no tiene archivo asignado: no se propone nombre.")
+            return
         current_values = list(self.tree.item(iid, "values"))
         current_values[3] = new_value
         self.tree.item(iid, values=tuple(current_values))

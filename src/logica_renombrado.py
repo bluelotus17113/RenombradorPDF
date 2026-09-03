@@ -10,6 +10,16 @@ from procesamiento_pdf import extraer_texto_de_informe
 import config
 
 
+NOMBRE_SIN_DATOS = "SIN DATOS DEL INFORME"
+NOMBRE_SIN_ARCHIVO = "ARCHIVO_NO_ASIGNADO"
+
+
+def tiene_archivo(row) -> bool:
+    """True si la fila tiene un PDF asignado. Sin archivo no se propone nombre."""
+    ruta = row.get("Ruta_Archivo_Original")
+    return pd.notna(ruta) and str(ruta).strip() != ""
+
+
 def _extraer_por_filas(texto: str) -> list[dict]:
     """
     Parsing por filas: cada linea que empieza con una fecha se considera
@@ -161,11 +171,11 @@ def generar_guia_completa(df_informe: pd.DataFrame, rutas_pdfs_a_renombrar: list
     df_informe["Ruta_Archivo_Original"] = pd.Series([str(p) for p in archivos_ordenados[:num_filas_informe]])
 
     def generar_nombre(row):
+        if not tiene_archivo(row):
+            return NOMBRE_SIN_ARCHIVO
         nombre = _generar_nombre(row)
         if nombre is None:
-            if pd.notna(row.get("Ruta_Archivo_Original")):
-                return "SIN DATOS DEL INFORME"
-            return "ARCHIVO_NO_ASIGNADO"
+            return NOMBRE_SIN_DATOS
         return nombre
 
     df_informe["Nuevo_Nombre_Propuesto"] = df_informe.apply(generar_nombre, axis=1)
@@ -179,7 +189,7 @@ def generar_guia_completa(df_informe: pd.DataFrame, rutas_pdfs_a_renombrar: list
                 "Acta": "",
                 "Identificacion": "",
                 "Ruta_Archivo_Original": str(path),
-                "Nuevo_Nombre_Propuesto": "SIN DATOS DEL INFORME",
+                "Nuevo_Nombre_Propuesto": NOMBRE_SIN_DATOS,
                 "EsContributivo": False,
                 "Seccion": ""
             })
@@ -207,15 +217,16 @@ def ejecutar_renombrado(df_final: pd.DataFrame, destino_path: Path) -> tuple[int
         ruta_str = row.get("Ruta_Archivo_Original")
 
         tipo_doc = ""
-        parts = nombre_propuesto.split("_")
-        if parts and parts[0]:
-            tipo_doc = parts[0]
+        if nombre_propuesto not in (NOMBRE_SIN_DATOS, NOMBRE_SIN_ARCHIVO):
+            parts = nombre_propuesto.split("_")
+            if parts and parts[0]:
+                tipo_doc = parts[0]
 
-        if pd.isna(ruta_str) or ruta_str == "":
+        if pd.isna(ruta_str) or str(ruta_str).strip() == "":
             resultados.append({
                 "Nombre_Original": "",
-                "Nombre_Nuevo": nombre_propuesto,
-                "Tipo": tipo_doc,
+                "Nombre_Nuevo": "",
+                "Tipo": "",
                 "Acta": acta,
                 "Identificacion": identificacion,
                 "Seccion": seccion,
@@ -223,7 +234,7 @@ def ejecutar_renombrado(df_final: pd.DataFrame, destino_path: Path) -> tuple[int
             })
             continue
 
-        if nombre_propuesto in ["SIN DATOS DEL INFORME", "ARCHIVO_NO_ASIGNADO"]:
+        if nombre_propuesto in (NOMBRE_SIN_DATOS, NOMBRE_SIN_ARCHIVO):
             resultados.append({
                 "Nombre_Original": Path(ruta_str).name,
                 "Nombre_Nuevo": nombre_propuesto,
