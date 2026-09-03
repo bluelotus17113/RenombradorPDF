@@ -1,0 +1,33 @@
+{
+  "perfiles": {
+    "Salud_Monteria": {
+      "nombre": "Salud Montería",
+      "regex_acta": "\\b(1\\d{5})\\b",
+      "regex_identificacion": "\\b(\\d{7,11})\\b",
+      "regex_fecha": "\\b\\d{2}/\\d{2}/\\d{4}\\b",
+      "nombre_plantilla": "{DocType}_{Identificacion}_{Acta}.pdf",
+      "doc_types": [
+        "CC",
+        "TI",
+        "PT",
+        "RC"
+      ],
+      "doc_type_default": "CC",
+      "numeros_excluidos": [
+        "1000",
+        "2025",
+        "2026"
+      ],
+      "secciones_contributivo_keywords": [
+        "CONTRIBUTIVO"
+      ],
+      "secciones_header_regex": "Administradora\\s+[A-ZÁÉÍÓÚÑ]+\\s+EPS\\s+S\\.?A\\.?(?:\\s*[-,]\\s*(\\w+)\\s+Contrato|\\s+Contrato\\s+(\\S+))",
+      "modo_extraccion": "dos_listas",
+      "preferir_capa_texto": true,
+      "ocr_dpi": 300,
+      "ocr_lang": "spa"
+    }
+  },
+  "perfil_activo": "Salud_Monteria",
+  "tesseract_cmd": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+}

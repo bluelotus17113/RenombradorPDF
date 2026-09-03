@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# PyInstaller
+/build/
+/dist/
+*.manifest
+
+# Datos de trabajo (PDFs reales, salidas, logs)
+archivos_entrada/
+archivos_salida/
+logs/
+*.xlsx
+debug_image.png
+*.rar
